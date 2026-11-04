@@ -1,0 +1,42 @@
+#!/bin/bash
+# The only thing pihole-agent's SSH key can run on the secondary Pi-hole (authorized_keys command=...).
+set -u
+export PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin TERM=dumb
+
+unit=pihole-agent-update
+dir=/var/lib/pihole-agent-cmd
+log=$dir/update.log
+rc=$dir/update.rc
+
+case "${SSH_ORIGINAL_COMMAND:-}" in
+  versions)
+    pihole updatechecker >/dev/null 2>&1
+    pihole -v
+    ;;
+  update-start)
+    # A unit of its own, so a dropped connection can't kill an update halfway.
+    systemctl is-active --quiet "$unit" && exit 0
+    install -d -m 700 "$dir"
+    rm -f "$rc"
+    systemctl reset-failed "$unit" 2>/dev/null
+    systemd-run --quiet --collect --unit="$unit" --setenv=TERM=dumb --setenv=PATH="$PATH" \
+      /bin/bash -c "pihole -up </dev/null >'$log' 2>&1; echo \$? >'$rc'"
+    ;;
+  update-status)
+    if systemctl is-active --quiet "$unit"; then
+      echo running
+    elif [ -s "$rc" ]; then
+      cat "$rc"
+    else
+      echo unknown
+    fi
+    tail -n 25 "$log" 2>/dev/null | sed -E 's/\x1b\[[0-9;?]*[A-Za-z]//g' | tr -d '\r'
+    ;;
+  dns-check)
+    dig +short +time=3 +tries=2 @127.0.0.1 cloudflare.com
+    ;;
+  *)
+    echo "not allowed" >&2
+    exit 2
+    ;;
+esac
